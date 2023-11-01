@@ -1,12 +1,13 @@
 extern crate clap;
+extern crate aes;
 use clap::{App, Arg};
 use std::fs::File;
 use std::io::{Read, Write};
-use crypto::aes::{self, KeySize};
-use crypto::blockmodes::{NoPadding, PkcsPadding};
-use crypto::buffer::{ReadBuffer, WriteBuffer, BufferResult};
-use crypto::symmetriccipher::Encryptor;
-
+use aes::Aes128;
+use aes::cipher::{
+    BlockCipher, BlockEncrypt, BlockDecrypt, KeyInit,
+    generic_array::GenericArray,
+};
 
 fn key_setup(key: &[u8], s_box: &mut [u8; 256]) {
     for i in 0..256 {
@@ -38,54 +39,26 @@ fn stream_generation(data: &mut [u8], s_box: &mut [u8; 256]) {
     }
 }
 
-fn aes_ecb_encrypt(data: &[u8], key: &[u8]) -> Vec<u8> {
-    let mut encryptor = aes::ecb_encryptor(KeySize::KeySize128, key, NoPadding);
-    let mut output = Vec::new();
-    let mut read_buffer = crypto::buffer::RefReadBuffer::new(data);
-    let mut write_buffer = crypto::buffer::RefWriteBuffer::new(&mut output);
-    encryptor.encrypt(&mut read_buffer, &mut write_buffer, true).unwrap();
-
-    let remaining = read_buffer.take_remaining();
-    if !remaining.is_empty() {
-        panic!("Unexpected remaining data in AES-ECB encryption");
+fn aes_encrypt(data: &mut Vec<u8>, key: &[u8]) {
+    // Ensure the key length is correct for AES-128 (16 bytes)
+    if key.len() != 16 {
+        eprintln!("AES key must be 16 bytes long.");
+        std::process::exit(1);
     }
 
-    output
-}
+    let aes_key = GenericArray::from_slice(key);
+    let cipher = Aes128::new(&aes_key);
 
-fn aes_cbc_encrypt(data: &[u8], key: &[u8], iv: &[u8]) -> Vec<u8> {
-    let mut encryptor = aes::cbc_encryptor(KeySize::KeySize128, key, iv, PkcsPadding);
-    let mut output = Vec::new();
-    let mut read_buffer = crypto::buffer::RefReadBuffer::new(data);
-    let mut write_buffer = crypto::buffer::RefWriteBuffer::new(&mut output);
-    encryptor.encrypt(&mut read_buffer, &mut write_buffer, true).unwrap();
-
-    let remaining = read_buffer.take_remaining();
-    if !remaining.is_empty() {
-        panic!("Unexpected remaining data in AES-CBC encryption");
+    for chunk in data.chunks_mut(16) {
+        let mut block = GenericArray::from_exact_iter(chunk.iter()).unwrap();
+        cipher.encrypt_block(&mut block);
+        chunk.copy_from_slice(block.as_slice());
     }
-
-    output
-}
-
-fn aes_ctr_encrypt(data: &[u8], key: &[u8], nonce: u64) -> Vec<u8> {
-    let mut encryptor = aes::ctr(KeySize::KeySize128, key, &nonce.to_le_bytes());
-    let mut output = Vec::new();
-    let mut read_buffer = crypto::buffer::RefReadBuffer::new(data);
-    let mut write_buffer = crypto::buffer::RefWriteBuffer::new(&mut output);
-    encryptor.encrypt(&mut read_buffer, &mut write_buffer, true).unwrap();
-
-    let remaining = read_buffer.take_remaining();
-    if !remaining.is_empty() {
-        panic!("Unexpected remaining data in AES-CTR encryption");
-    }
-
-    output
 }
 
 fn main() {
     let matches = App::new("Encryption/Decryption")
-        .version("1.0")
+        .version("2.0")
         .author("Your Name")
         .about("Encrypts or decrypts a file using different ciphers and modes")
         .arg(
@@ -169,12 +142,6 @@ fn main() {
             std::process::exit(1);
         }
     }
-
-    if skip_bytes > input_data.len() {
-        eprintln!("Skip byte count exceeds file size.");
-        std::process::exit(1);
-    }
-
     // Preserve the specified number of bytes as clear (unencrypted)
     let clear_bytes = input_data[..skip_bytes].to_vec();
     input_data = input_data[skip_bytes..].to_vec();
@@ -187,17 +154,9 @@ fn main() {
             stream_generation(&mut output_data, &mut s_box);
         }
         "aes-ecb" => {
-            output_data = aes_ecb_encrypt(&input_data, &key_data);
+			aes_encrypt(&mut input_data, &key_data);
         }
-        "aes-cbc" => {
-            let iv = key_data.to_vec(); // Use the key as the initialization vector (for simplicity)
-            output_data = aes_cbc_encrypt(&input_data, &key_data, &iv);
-        }
-        "aes-ctr" => {
-            let nonce = 12345; // Change this to your desired nonce
-            output_data = aes_ctr_encrypt(&input_data, &key_data, nonce);
-        }
-        _ => {
+                _ => {
             eprintln!("Invalid cipher specified.");
             std::process::exit(1);
         }

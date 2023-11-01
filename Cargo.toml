@@ -8,3 +8,4 @@ edition = "2021"
 [dependencies]
 clap = "2.33"
 rust-crypto = "0.2"
+aes = "0.8"
